@@ -1,0 +1,8 @@
+django>=4.2,<5.0
+djangorestframework>=3.15
+django-environ>=0.11
+psycopg2-binary>=2.9
+requests>=2.31
+rich>=13.7
+tabulate>=0.9
+python-dateutil>=2.9

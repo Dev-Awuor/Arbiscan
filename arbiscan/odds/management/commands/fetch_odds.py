@@ -1,0 +1,143 @@
+from django.core.management.base import BaseCommand
+from django.conf import settings
+from django.utils.dateparse import parse_datetime
+from odds.models import Tournament, Fixture, BookmakerOdds
+from odds.services.oddspapi import OddspapiClient
+from odds.services.extractor import extract_all_markets, filter_consistent_books
+
+MARKET_LEG_MAP = {
+    "FT_1X2": [("leg1","home"),("leg2","draw"),("leg3","away")],
+    "BTTS":   [("leg1","yes"), ("leg2","no")],
+    "OU25":   [("leg1","over"),("leg2","under")],
+    "OU15":   [("leg1","over"),("leg2","under")],
+    "OU35":   [("leg1","over"),("leg2","under")],
+    "DC":     [("leg1","1x"), ("leg2","x2"), ("leg3","12")],
+}
+MARKET_LABELS = {
+    "FT_1X2":("Home","Draw","Away"),
+    "BTTS":  ("Yes","No",""),
+    "OU25":  ("Over","Under",""),
+    "OU15":  ("Over","Under",""),
+    "OU35":  ("Over","Under",""),
+    "DC":     ("1X","X2","12"),
+}
+
+
+class Command(BaseCommand):
+    help = "Fetch live odds from OddsPapi and persist to database"
+
+    def add_arguments(self, parser):
+        parser.add_argument("--leagues",   nargs="+", default=["ucl","epl","laliga"],
+                            help="League slugs, or all for everything in TOURNAMENT_MAP")
+        parser.add_argument("--from-file", action="store_true",
+                            help="Load tournament IDs from .league_ids")
+        parser.add_argument("--books",     nargs="+",
+                            default=["pinnacle","bet365","1xbet","unibet"])
+        parser.add_argument("--dry-run",   action="store_true")
+        parser.add_argument("--debug",     action="store_true",
+                            help="Print raw API response count per book")
+
+    def handle(self, *args, **options):
+        client  = OddspapiClient()
+        leagues = options["leagues"]
+        books   = options["books"]
+        t_map   = settings.TOURNAMENT_MAP
+
+        if options["from_file"]:
+            try:
+                with open(".league_ids") as f:
+                    tid_list = [int(i) for i in f.read().strip().split(",") if i.strip()]
+                self.stdout.write("Loaded " + str(len(tid_list)) + " league IDs from .league_ids")
+            except FileNotFoundError:
+                self.stderr.write("ERROR: .league_ids not found. Run: python manage.py discover_all_leagues --save")
+                return
+
+        elif "all" in leagues:
+            tid_list = [v[0] for v in t_map.values()]
+            self.stdout.write("Using all " + str(len(tid_list)) + " leagues from TOURNAMENT_MAP")
+
+        else:
+            tid_list = [t_map[l][0] for l in leagues if l in t_map]
+            missing  = [l for l in leagues if l not in t_map]
+            if missing:
+                self.stderr.write("WARNING: Unknown slugs ignored: " + str(missing))
+
+        if not tid_list:
+            self.stderr.write("No valid leagues resolved. Aborting.")
+            return
+
+        self.stdout.write("\nFetching: " + str(len(tid_list)) + " tournaments x " + str(books))
+        raw   = client.fetch_multi_book_odds(tid_list, books, debug=options["debug"])
+        names = client.fetch_fixture_names(tid_list)
+        self.stdout.write(f"Fixtures: {len(raw)}  Names: {len(names)}\n")
+
+        saved_fx = saved_odds = skipped = 0
+
+        for fid, fx in raw.items():
+            home, away = names.get(fid, ("?","?"))
+            if "?" in (home, away):
+                skipped += 1
+                continue
+
+            # Extract odds per book
+            raw_book_data = {}
+            for book, bdata in fx["bookmakerOdds"].items():
+                mkts = extract_all_markets(bdata)
+                if mkts:
+                    raw_book_data[book] = mkts
+
+            if len(raw_book_data) < 2:
+                skipped += 1
+                continue
+
+            # Remove books with reversed home/away from FT_1X2 only
+            book_data = filter_consistent_books(raw_book_data)
+
+            if len(book_data) < 2:
+                skipped += 1
+                continue
+
+            if options["dry_run"]:
+                ft_books = [b for b in book_data if "FT_1X2" in book_data[b]]
+                ou_books = [b for b in book_data if "OU25"   in book_data[b]]
+                self.stdout.write(
+                    f"  [DRY] {home} vs {away:<32} "
+                    f"FT:{ft_books}  OU:{ou_books}")
+                continue
+
+            t_obj, _ = Tournament.objects.get_or_create(
+                api_id=str(fx.get("tournamentId","?")),
+                defaults={"slug":"","name":f"Tournament {fx.get('tournamentId')}","category":""}
+            )
+            fixture, _ = Fixture.objects.update_or_create(
+                fixture_id=fid,
+                defaults={
+                    "tournament": t_obj,
+                    "home_team":  home,
+                    "away_team":  away,
+                    "kickoff":    parse_datetime(fx["startTime"]) if fx.get("startTime") else None,
+                    "status":     "upcoming",
+                }
+            )
+            saved_fx += 1
+
+            for book, mkts in book_data.items():
+                for mkt_label, legs in mkts.items():
+                    leg_map = MARKET_LEG_MAP.get(mkt_label, [])
+                    labels  = MARKET_LABELS.get(mkt_label, ("","",""))
+                    BookmakerOdds.objects.update_or_create(
+                        fixture=fixture, bookmaker=book, market=mkt_label,
+                        defaults={
+                            "leg1": legs.get(leg_map[0][1]) if len(leg_map)>0 else None,
+                            "leg2": legs.get(leg_map[1][1]) if len(leg_map)>1 else None,
+                            "leg3": legs.get(leg_map[2][1]) if len(leg_map)>2 else None,
+                            "leg1_label": labels[0],
+                            "leg2_label": labels[1],
+                            "leg3_label": labels[2] if len(labels)>2 else "",
+                            "is_active":  True,
+                            "source":     "oddspapi",
+                        })
+                    saved_odds += 1
+
+        self.stdout.write(self.style.SUCCESS(
+            f"\nSaved {saved_fx} fixtures, {saved_odds} odds. Skipped: {skipped}"))
