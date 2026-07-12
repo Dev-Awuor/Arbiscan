@@ -6,3 +6,7 @@ requests>=2.31
 rich>=13.7
 tabulate>=0.9
 python-dateutil>=2.9
+reportlab>=4.0
+qrcode[pil]>=8.0
+djangorestframework-simplejwt>=5.5
+django-cors-headers>=4.9

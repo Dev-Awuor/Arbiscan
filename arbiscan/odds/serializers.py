@@ -2,6 +2,22 @@ from rest_framework import serializers
 from .models import Tournament, Fixture, BookmakerOdds, ArbitrageResult
 
 
+class CalcInputSerializer(serializers.Serializer):
+    """Input for the free public arbitrage calculator."""
+    odds          = serializers.ListField(
+        child=serializers.FloatField(min_value=1.0001),
+        min_length=2, max_length=8,
+        help_text="Decimal odds, one per outcome (2-8).")
+    total_stake   = serializers.FloatField(required=False, min_value=1, allow_null=True)
+    target_profit = serializers.FloatField(required=False, min_value=1, allow_null=True)
+
+    def validate(self, data):
+        if data.get("total_stake") and data.get("target_profit"):
+            raise serializers.ValidationError(
+                "Provide either total_stake or target_profit, not both.")
+        return data
+
+
 class TournamentSerializer(serializers.ModelSerializer):
     class Meta:
         model  = Tournament

@@ -99,7 +99,7 @@ class Command(BaseCommand):
             min_book_coverage = 2
             verified = []
 
-            self.stdout.write("\nProbing each league against " + probe_book + " for real odds coverage...")
+            self.stdout.write("\nProbing each league against " + str(probe_books) + " for real odds coverage...")
             for lg in all_leagues[:top_n]:
                 time.sleep(2.0)
                 try:

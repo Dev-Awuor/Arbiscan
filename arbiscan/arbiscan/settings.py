@@ -17,10 +17,13 @@ INSTALLED_APPS = [
     "django.contrib.messages",
     "django.contrib.staticfiles",
     "rest_framework",
+    "corsheaders",
     "odds.apps.OddsConfig",
+    "accounts.apps.AccountsConfig",
 ]
 
 MIDDLEWARE = [
+    "corsheaders.middleware.CorsMiddleware",
     "django.middleware.security.SecurityMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
     "django.middleware.common.CommonMiddleware",
@@ -56,9 +59,28 @@ REST_FRAMEWORK = {
         "rest_framework.renderers.JSONRenderer",
         "rest_framework.renderers.BrowsableAPIRenderer",
     ],
+    "DEFAULT_AUTHENTICATION_CLASSES": [
+        "rest_framework_simplejwt.authentication.JWTAuthentication",
+        "rest_framework.authentication.SessionAuthentication",
+    ],
+    "DEFAULT_PERMISSION_CLASSES": [
+        "rest_framework.permissions.AllowAny",
+    ],
     "DEFAULT_PAGINATION_CLASS": "rest_framework.pagination.PageNumberPagination",
     "PAGE_SIZE": 50,
 }
+
+from datetime import timedelta
+SIMPLE_JWT = {
+    "ACCESS_TOKEN_LIFETIME":  timedelta(minutes=60),
+    "REFRESH_TOKEN_LIFETIME": timedelta(days=7),
+}
+
+# CORS - allow the Vite dev server (and any configured origins) to call the API.
+CORS_ALLOWED_ORIGINS = env.list(
+    "CORS_ALLOWED_ORIGINS",
+    default=["http://localhost:5173", "http://127.0.0.1:5173"],
+)
 
 STATIC_URL         = "/static/"
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
@@ -92,6 +114,47 @@ TOURNAMENT_MAP = {
     "fa_cup":       ("1243", "FA Cup"),
 
 }
+
+# --- Sport-aware config for 2-way cross-book arbitrage (new pipeline) ---
+# Each sport drives the interactive `arb` command.
+#   sport_id    : OddsPapi sportId (resolved via discovery, see _probe / discover_all_leagues)
+#   market      : BookmakerOdds market label the scanner pairs across books
+#   type        : "2way" (H2H home/away) or "3way" (FT_1X2 home/draw/away)
+#   books       : recommended bookmakers auto-selected for this sport (cross-book pool)
+#   name_filter : optional substrings to prefer main-tour tournaments (e.g. ATP/WTA over ITF)
+#   tournaments : optional fixed {slug: (api_id, name)}; if omitted the `arb` command
+#                 fetches the live list of currently-active tournaments at runtime
+#                 (tennis/MMA events rotate weekly, so static IDs would go stale).
+SPORTS = {
+    "tennis": {
+        "name": "Tennis", "sport_id": 12, "market": "H2H", "type": "2way",
+        "books": ["pinnacle", "bet365", "1xbet", "betsson", "unibet", "betika"],
+        "name_filter": ["ATP", "WTA"],
+    },
+    "basketball": {
+        "name": "Basketball", "sport_id": 11, "market": "H2H", "type": "2way",
+        "books": ["pinnacle", "bet365", "1xbet", "betsson", "unibet"],
+        "name_filter": [],
+    },
+    "mma": {
+        "name": "MMA / UFC", "sport_id": 20, "market": "H2H", "type": "2way",
+        "books": ["pinnacle", "bet365", "1xbet", "betsson", "unibet"],
+        "name_filter": ["UFC", "PFL", "Bellator"],
+    },
+    "worldcup": {
+        "name": "FIFA World Cup", "sport_id": 10, "market": "FT_1X2", "type": "3way",
+        "books": ["pinnacle", "bet365", "1xbet", "betsson", "unibet", "betika"],
+        "tournaments": {"worldcup": ("16", "FIFA World Cup")},
+    },
+}
+
+# --- Arbitrage sanity guards (reject corrupted/stale data that fabricates fake arbs) ---
+ODDS_LEG_CAP      = env.float("ODDS_LEG_CAP",      default=50.0)   # reject any single leg priced above this
+ARB_MAX_MARGIN    = env.float("ARB_MAX_MARGIN",    default=0.15)   # >15% "profit" => almost surely a data error
+ARB_FRESH_MINUTES = env.int("ARB_FRESH_MINUTES",   default=180)    # only scan odds fetched within N minutes
+
+# Freemium: free users see arbs up to this ROI%; higher-profit ones are locked.
+FREE_ARB_ROI_CAP  = env.float("FREE_ARB_ROI_CAP",  default=1.0)
 
 USE_TZ = True
 

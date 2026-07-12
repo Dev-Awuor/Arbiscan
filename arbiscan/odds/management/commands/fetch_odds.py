@@ -7,6 +7,7 @@ from odds.services.extractor import extract_all_markets, filter_consistent_books
 
 MARKET_LEG_MAP = {
     "FT_1X2": [("leg1","home"),("leg2","draw"),("leg3","away")],
+    "H2H":    [("leg1","home"),("leg2","away")],
     "BTTS":   [("leg1","yes"), ("leg2","no")],
     "OU25":   [("leg1","over"),("leg2","under")],
     "OU15":   [("leg1","over"),("leg2","under")],
@@ -15,6 +16,7 @@ MARKET_LEG_MAP = {
 }
 MARKET_LABELS = {
     "FT_1X2":("Home","Draw","Away"),
+    "H2H":   ("Home","Away",""),
     "BTTS":  ("Yes","No",""),
     "OU25":  ("Over","Under",""),
     "OU15":  ("Over","Under",""),
@@ -29,6 +31,9 @@ class Command(BaseCommand):
     def add_arguments(self, parser):
         parser.add_argument("--leagues",   nargs="+", default=["ucl","epl","laliga"],
                             help="League slugs, or all for everything in TOURNAMENT_MAP")
+        parser.add_argument("--tids",      nargs="+", default=None,
+                            help="Raw OddsPapi tournament IDs (used by the interactive "
+                                 "arb command for live tennis/MMA events)")
         parser.add_argument("--from-file", action="store_true",
                             help="Load tournament IDs from .league_ids")
         parser.add_argument("--books",     nargs="+",
@@ -43,7 +48,11 @@ class Command(BaseCommand):
         books   = options["books"]
         t_map   = settings.TOURNAMENT_MAP
 
-        if options["from_file"]:
+        if options["tids"]:
+            tid_list = [str(t) for t in options["tids"]]
+            self.stdout.write("Using " + str(len(tid_list)) + " tournament IDs passed via --tids")
+
+        elif options["from_file"]:
             try:
                 with open(".league_ids") as f:
                     tid_list = [int(i) for i in f.read().strip().split(",") if i.strip()]

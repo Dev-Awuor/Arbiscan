@@ -72,27 +72,23 @@ class Command(BaseCommand):
     #  Target mode 
 
     def _target_report(self, arbs, target: float):
-        console.print(f"\n[bold cyan]ARBISCAN  TARGET: KES {target:,.0f} profit[/bold cyan]\n")
+        console.print(f"\n[bold cyan]ARBISCAN  TARGET: KES {target:,.0f} profit per match[/bold cyan]\n")
 
-        cards      = []
-        remaining  = target
-        total_bank = 0.0
-
+        # Each card is sized independently so that THAT match alone yields the
+        # target profit - the bettor can place any single card to hit the goal.
+        cards = []
         for arb in arbs:
-            if float(arb.profit_pct) <= 0 or remaining <= 0:
+            if float(arb.profit_pct) <= 0:
                 continue
-            # Each arb contributes its full profit  user places all simultaneously
-            scaled = scale_to_target(arb, float(arb.profit))
+            scaled = scale_to_target(arb, target)
             if scaled:
                 cards.append((arb, scaled))
-                total_bank += scaled["bankroll"]
-                remaining  -= scaled["profit"]
 
         if not cards:
             console.print("[red]No valid arbs. Run fetch_odds + scan_arbs first.[/red]")
             return
 
-        # Summary table  ranked by profit (highest first)
+        # Summary table  ranked by margin (least bankroll first)
         t = Table(box=box.ROUNDED, header_style="bold magenta", expand=True)
         t.add_column("#",        width=4, style="bold yellow")
         t.add_column("Match",    min_width=28)
@@ -101,9 +97,7 @@ class Command(BaseCommand):
         t.add_column("Bankroll", justify="right", width=16)
         t.add_column("Profit",   justify="right", style="bold green", width=14)
 
-        total_profit = 0.0
         for i, (arb, scaled) in enumerate(cards, 1):
-            total_profit += scaled["profit"]
             t.add_row(
                 f"#{i}",
                 str(arb.fixture),
@@ -114,8 +108,12 @@ class Command(BaseCommand):
             )
 
         console.print(t)
-        console.print(f"\n  [bold]Total bankroll needed :[/bold] KES {total_bank:>12,.2f}")
-        console.print(f"  [bold green]Total guaranteed profit:[/bold green] KES {total_profit:>10,.2f}\n")
+        cheapest = min(cards, key=lambda c: c[1]["bankroll"])
+        console.print(
+            f"\n  Each card is sized to make [bold green]KES {target:,.0f}[/bold green] on its own.")
+        console.print(
+            f"  Cheapest to hit target: [bold]{cheapest[0].fixture}[/bold] "
+            f"with KES {cheapest[1]['bankroll']:,.2f} bankroll.\n")
 
         # Action cards
         console.print("[bold cyan] ACTION CARDS [/bold cyan]")
@@ -160,7 +158,12 @@ class Command(BaseCommand):
             books  = to_list(arb.books)
             odds   = to_list(arb.odds)
             stakes = scaled["stakes"]
-            legs   = MARKET_LEGS.get(arb.market, [f"Leg{j+1}" for j in range(len(odds))])
+            # For 2-way H2H (tennis/basketball/MMA) the legs ARE the two
+            # participants, so name them directly instead of "Home/Away".
+            if arb.market == "H2H":
+                legs = [arb.fixture.home_team, arb.fixture.away_team]
+            else:
+                legs = MARKET_LEGS.get(arb.market, [f"Leg{j+1}" for j in range(len(odds))])
 
             console.print(f"\n[bold yellow]#{i}  {arb.fixture}[/bold yellow]")
             console.print(f"    Kickoff : {arb.fixture.kickoff}  |  Market: [cyan]{arb.market}[/cyan]")

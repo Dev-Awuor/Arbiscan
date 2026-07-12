@@ -10,8 +10,14 @@ SEMANTIC_MAP = {
 
 OC_BTTS_MAP = {"104":"yes", "105":"no"}
 
+# Match-winner 2-way market (tennis / basketball / MMA). Outcome ids are stable:
+# 123 = participant 1 (home), 124 = participant 2 (away). Some books (bet365) use
+# opaque numeric bookmakerOutcomeIds, so we map by oc_id, not by bookmakerOutcomeId.
+H2H_OC_MAP = {"123": "home", "124": "away"}
+
 MARKET_ID_MAP = {
     "101":  "FT_1X2",
+    "123":  "H2H",      # 2-way match winner (tennis/basketball/MMA)
     "104":  "BTTS",
     "1010": "OU25",
     "108":  "OU15",
@@ -34,6 +40,7 @@ MARKET_EXPECTED_LEGS = {
     "OU15":   {"over","under"},
     "OU35":   {"over","under"},
     "DC":     {"1x","x2","12"},
+    "H2H":    {"home","away"},
 }
 
 
@@ -46,7 +53,11 @@ def extract_legs(mkts_block: dict, market_id: str) -> dict:
         if not price or float(price) >= 50:
             continue
         raw = str(player.get("bookmakerOutcomeId", "")).lower().strip()
-        if raw in SEMANTIC_MAP:
+        # H2H match-winner: map by stable oc_id so books with opaque numeric
+        # bookmakerOutcomeIds (e.g. bet365) still resolve to home/away.
+        if str(market_id) == "123" and str(oc_id) in H2H_OC_MAP:
+            legs[H2H_OC_MAP[str(oc_id)]] = round(float(price), 3)
+        elif raw in SEMANTIC_MAP:
             legs[SEMANTIC_MAP[raw]] = round(float(price), 3)
         elif raw in XBET_MAP:
             legs[XBET_MAP[raw]] = round(float(price), 3)

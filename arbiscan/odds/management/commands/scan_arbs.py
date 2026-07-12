@@ -1,6 +1,8 @@
+from datetime import timedelta
 from django.core.management.base import BaseCommand
 from django.conf import settings
 from django.db.models import Prefetch
+from django.utils import timezone
 from odds.models import Fixture, BookmakerOdds, ArbitrageResult
 from odds.services.engine import scan_fixture
 
@@ -13,10 +15,14 @@ class Command(BaseCommand):
         parser.add_argument("--bankroll",       type=float, default=None)
         parser.add_argument("--threshold",      type=float, default=None)
         parser.add_argument("--markets",        nargs="+",
-                            default=["FT_1X2","BTTS","OU25","OU15","OU35"])
+                            default=["H2H","FT_1X2","BTTS","OU25","OU15","OU35"])
         parser.add_argument("--leagues",        nargs="+", default=None)
         parser.add_argument("--near-miss-only", action="store_true")
         parser.add_argument("--clear",          action="store_true")
+        parser.add_argument("--fresh-minutes",  type=int, default=None,
+                            help="Only scan odds fetched within the last N minutes "
+                                 "(0 disables; default settings.ARB_FRESH_MINUTES). "
+                                 "Prevents stale DB rows from fabricating fake arbs.")
 
     def handle(self, *args, **options):
         bankroll  = options["bankroll"]  or settings.DEFAULT_BANKROLL
@@ -28,8 +34,18 @@ class Command(BaseCommand):
             n, _ = ArbitrageResult.objects.all().delete()
             self.stdout.write(f"Cleared {n} previous results")
 
+        fresh_min = options["fresh_minutes"]
+        if fresh_min is None:
+            fresh_min = getattr(settings, "ARB_FRESH_MINUTES", 180)
+
+        odds_qs = BookmakerOdds.objects.filter(is_active=True)
+        if fresh_min and fresh_min > 0:
+            cutoff = timezone.now() - timedelta(minutes=fresh_min)
+            odds_qs = odds_qs.filter(fetched_at__gte=cutoff)
+            self.stdout.write(f"Freshness filter: odds fetched within {fresh_min} min")
+
         qs = Fixture.objects.filter(status="upcoming").prefetch_related(
-            Prefetch("odds", queryset=BookmakerOdds.objects.filter(is_active=True)))
+            Prefetch("odds", queryset=odds_qs))
 
         if options["leagues"]:
             t_map = settings.TOURNAMENT_MAP
@@ -53,10 +69,7 @@ class Command(BaseCommand):
             if not nm_only:
                 for r in arbs:
                     if r["profit_pct"] >= options["min_profit"]:
-                        home_o = max((book_data[b].get("FT_1X2",{}).get("home",0)
-                                      for b in book_data), default=0)
-                        away_o = max((book_data[b].get("FT_1X2",{}).get("away",0)
-                                      for b in book_data), default=0)
+                        max_leg = max((float(o) for o in r["odds"]), default=0)
                         ArbitrageResult.objects.update_or_create(
                             fixture=fixture, market=r["market"], books=r["books"],
                             defaults={
@@ -68,7 +81,7 @@ class Command(BaseCommand):
                                 "profit":      r["profit_kes"],
                                 "profit_pct":  r["profit_pct"],
                                 "arb_sum":     r["sum"],
-                                "is_high_odds": max(home_o,away_o) >= 4.0,
+                                "is_high_odds": max_leg >= 4.0,
                                 "is_valid":    True,
                             })
                         total_arbs += 1

@@ -1,3 +1,4 @@
+import uuid
 from django.db import models
 
 
@@ -34,7 +35,8 @@ class Fixture(models.Model):
 
 class BookmakerOdds(models.Model):
     MARKETS = [
-        ("FT_1X2","Full Time 1X2"), ("BTTS","Both Teams To Score"),
+        ("FT_1X2","Full Time 1X2"), ("H2H","Head to Head 2-way"),
+        ("BTTS","Both Teams To Score"),
         ("OU25","Over/Under 2.5"),  ("OU15","Over/Under 1.5"),
         ("OU35","Over/Under 3.5"),
     ]
@@ -97,3 +99,37 @@ class ArbitrageResult(models.Model):
 
     def __str__(self):
         return f"{self.fixture} | {self.market} | +{self.profit_pct}%"
+
+
+class Report(models.Model):
+    """A generated, traceable arbitrage report.
+
+    Each row is an immutable snapshot of the arbs at generation time, sealed
+    with a content hash + HMAC signature so a printed PDF can be verified as
+    genuinely produced by this system (the QR code carries these fields)."""
+    report_id    = models.UUIDField(default=uuid.uuid4, editable=False, unique=True)
+    created_at   = models.DateTimeField(auto_now_add=True)
+    title        = models.CharField(max_length=120, default="Arbitrage Report")
+    sport        = models.CharField(max_length=40,  blank=True)
+    market       = models.CharField(max_length=20,  blank=True)
+    target       = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    bankroll     = models.DecimalField(max_digits=12, decimal_places=2, default=0)
+    books        = models.JSONField(default=list)
+    arb_count    = models.IntegerField(default=0)
+    total_profit = models.DecimalField(max_digits=14, decimal_places=2, default=0)
+    snapshot     = models.JSONField(default=list)         # frozen, sized arb rows
+    content_hash = models.CharField(max_length=64, blank=True)   # sha256 of snapshot
+    signature    = models.CharField(max_length=64, blank=True)   # hmac-sha256 proof
+    pdf_path     = models.CharField(max_length=300, blank=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+        indexes  = [models.Index(fields=["created_at"]),
+                    models.Index(fields=["report_id"])]
+
+    def __str__(self):
+        return f"Report {self.short_id} | {self.created_at:%Y-%m-%d %H:%M} | {self.arb_count} arbs"
+
+    @property
+    def short_id(self) -> str:
+        return str(self.report_id)[:8]

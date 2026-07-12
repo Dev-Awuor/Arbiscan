@@ -71,6 +71,12 @@ class OddspapiClient:
     def get_fixtures(self, tournament_id) -> list:
         return self._get("fixtures", {"tournamentId": tournament_id})
 
+    def get_tournaments(self, sport_id) -> list:
+        """List all tournaments for a sport (used by the interactive `arb`
+        command to show currently-active events)."""
+        data = self._get("tournaments", {"sportId": sport_id})
+        return data if isinstance(data, list) else []
+
     def fetch_multi_book_odds(self, tournament_ids: list, bookmakers: list, debug: bool = False) -> dict:
         combined = {}
         for i, book in enumerate(bookmakers):

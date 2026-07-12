@@ -7,3 +7,6 @@ db.sqlite3
 .DS_Store
 venv/
 env/
+reports/
+.api_cache/
+arbiscan_last_report.txt

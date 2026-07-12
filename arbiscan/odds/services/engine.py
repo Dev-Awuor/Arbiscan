@@ -1,6 +1,14 @@
 from django.conf import settings
 
-NEAR_MISS = getattr(settings, "NEAR_MISS_THRESHOLD", 3.0)
+NEAR_MISS    = getattr(settings, "NEAR_MISS_THRESHOLD", 3.0)
+ODDS_LEG_CAP = getattr(settings, "ODDS_LEG_CAP", 50.0)
+MAX_MARGIN   = getattr(settings, "ARB_MAX_MARGIN", 0.15)
+
+
+def _sane_odds(odds) -> bool:
+    """Reject corrupted/ghost prices that fabricate fake arbs.
+    Every leg must be a real decimal price (>1.0) and below the cap."""
+    return all(o and 1.0 < float(o) <= ODDS_LEG_CAP for o in odds)
 
 
 def check_2way(oA: float, oB: float) -> dict:
@@ -34,11 +42,27 @@ def scan_fixture(book_data: dict, bankroll: float = 10000,
     hits  = []
 
     def add(market, pair, bks, odds):
+        # Guard 1: every leg must be a sane price (kills corrupted/ghost odds).
+        if not _sane_odds(odds):
+            return
         r = check_3way(*odds) if len(odds) == 3 else check_2way(*odds)
+        # Guard 2: an "arb" with an implausibly large margin is a data error,
+        # not a real edge (real arbs are ~0.5-5%). Drop it.
+        if r["arb"] and r["margin"] > MAX_MARGIN:
+            return
         if r["arb"] or r["overround_pct"] < near_miss_threshold:
             sk, pay, prof = compute_stakes(odds, bankroll) if r["arb"] else ([], 0, 0)
             hits.append({"market":market,"pair":pair,"books":bks,"odds":odds,
                           "stakes":sk,"payout":pay,"profit_kes":prof, **r})
+
+    # --- H2H 2-way cross-book (tennis, basketball, MMA): A from book1, B from book2 ---
+    for bA in books:
+        for bB in books:
+            if bA == bB: continue
+            a = book_data[bA].get("H2H",{}).get("home")
+            b = book_data[bB].get("H2H",{}).get("away")
+            if a and b:
+                add("H2H","A+B",[bA,bB],[a,b])
 
     for bH in books:
         for bD in books:

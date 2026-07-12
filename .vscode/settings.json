@@ -1,5 +1,7 @@
 {
   "python.analysis.extraPaths": [
-    "c:\\Users\\LLOYD\\.vscode\\extensions\\ms-security.ms-sentinel-1.3.0\\python"
-  ]
+    "c:\\Users\\LLOYD\\.vscode\\extensions\\ms-security.ms-sentinel-1.3.0\\python",
+    "c:\\Users\\LLOYD\\.vscode\\extensions\\ms-security.ms-sentinel-2.2.0\\python"
+  ],
+  "postman.settings.dotenv-detection-notification-visibility": false
 }
