@@ -1,6 +1,8 @@
 import { useState } from "react";
 import { useNavigate, Link } from "react-router-dom";
+import { ArrowRight } from "lucide-react";
 import { useAuth } from "../auth";
+import AuthLayout from "./AuthLayout";
 
 export default function Register() {
   const { register } = useAuth();
@@ -16,27 +18,25 @@ export default function Register() {
     setError(""); setBusy(true);
     try {
       await register(username, email, password);
-      nav("/live");
+      nav("/app");
     } catch (err) {
       const d = err.response?.data;
-      setError(d?.username?.[0] || d?.password?.[0] || "Could not register.");
+      setError(d?.username?.[0] || d?.email?.[0] || d?.password?.[0] || "Could not create the account. Try again.");
     } finally {
       setBusy(false);
     }
   }
 
   return (
-    <div className="card narrow">
-      <h1>Create a free account</h1>
-      <p className="muted">The calculator is free without an account. Sign up to unlock the live sure-bets feed (premium).</p>
+    <AuthLayout title="Create your account" subtitle="Free. Takes about ten seconds."
+      footer={<>Already have one? <Link to="/login">Log in</Link></>}>
       <form onSubmit={submit}>
-        <label>Username<input value={username} onChange={(e) => setU(e.target.value)} required /></label>
-        <label>Email (optional)<input type="email" value={email} onChange={(e) => setE(e.target.value)} /></label>
-        <label>Password<input type="password" value={password} onChange={(e) => setP(e.target.value)} minLength={8} required /></label>
-        <button className="btn" disabled={busy}>{busy ? "…" : "Sign up"}</button>
+        <label>Username<input autoComplete="username" value={username} onChange={(e) => setU(e.target.value)} required /></label>
+        <label>Email (optional)<input type="email" autoComplete="email" value={email} onChange={(e) => setE(e.target.value)} /></label>
+        <label>Password, at least 8 characters<input type="password" autoComplete="new-password" value={password} onChange={(e) => setP(e.target.value)} minLength={8} required /></label>
+        <button className="pill pill-accent pill-lg" disabled={busy}>{busy ? "Creating account…" : <>Create account <ArrowRight size={18} /></>}</button>
       </form>
-      {error && <p className="error">{error}</p>}
-      <p className="muted">Already have an account? <Link to="/login">Log in</Link></p>
-    </div>
+      {error && <p className="auth-error" role="alert">{error}</p>}
+    </AuthLayout>
   );
 }
