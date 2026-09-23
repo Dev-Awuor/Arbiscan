@@ -2,9 +2,10 @@ from django.urls import path
 from . import views
 
 urlpatterns = [
-    # Free, public
+    # Public
     path("calc/",                          views.calculator_view,                   name="calculator"),
-    # Premium (live data)
+    # Login required
+    path("stats/",                         views.stats_view,                        name="stats"),
     path("live/sure-bets/",                views.live_sure_bets_view,               name="live-sure-bets"),
     path("fixtures/",                      views.FixtureListView.as_view(),         name="fixture-list"),
     path("fixtures/<int:pk>/",             views.FixtureDetailView.as_view(),       name="fixture-detail"),
