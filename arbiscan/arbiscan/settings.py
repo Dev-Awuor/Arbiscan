@@ -64,7 +64,7 @@ REST_FRAMEWORK = {
         "rest_framework.authentication.SessionAuthentication",
     ],
     "DEFAULT_PERMISSION_CLASSES": [
-        "rest_framework.permissions.AllowAny",
+        "rest_framework.permissions.IsAuthenticated",
     ],
     "DEFAULT_PAGINATION_CLASS": "rest_framework.pagination.PageNumberPagination",
     "PAGE_SIZE": 50,
@@ -153,8 +153,6 @@ ODDS_LEG_CAP      = env.float("ODDS_LEG_CAP",      default=50.0)   # reject any 
 ARB_MAX_MARGIN    = env.float("ARB_MAX_MARGIN",    default=0.15)   # >15% "profit" => almost surely a data error
 ARB_FRESH_MINUTES = env.int("ARB_FRESH_MINUTES",   default=180)    # only scan odds fetched within N minutes
 
-# Freemium: free users see arbs up to this ROI%; higher-profit ones are locked.
-FREE_ARB_ROI_CAP  = env.float("FREE_ARB_ROI_CAP",  default=1.0)
 
 USE_TZ = True
 

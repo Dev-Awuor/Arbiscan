@@ -1,21 +1,33 @@
+from collections import Counter
+
+from django.db.models import Avg, Count, Max
+from django.conf import settings
+from django.utils import timezone
 from rest_framework import generics, status
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
-from django.conf import settings
+
 from .models import Fixture, BookmakerOdds, ArbitrageResult
 from .serializers import (FixtureSerializer, BookmakerOddsSerializer,
                           ArbitrageResultSerializer, CalcInputSerializer)
 from .services.engine import scan_fixture
 from .services.calculator import calc_stakes
 from .services import reporting
-from accounts.permissions import IsPremium
+
+# Everything except the calculator requires login (DEFAULT_PERMISSION_CLASSES).
+
+
+def _open_arbs():
+    """Valid arbs on fixtures that have not kicked off yet."""
+    return ArbitrageResult.objects.filter(
+        is_valid=True, profit_pct__gt=0, fixture__kickoff__gt=timezone.now())
 
 
 @api_view(["POST"])
 @permission_classes([AllowAny])
 def calculator_view(request):
-    """FREE public arbitrage calculator. No auth, no data feed - pure math."""
+    """Public arbitrage calculator. Pure math, no data feed."""
     ser = CalcInputSerializer(data=request.data)
     ser.is_valid(raise_exception=True)
     d = ser.validated_data
@@ -31,70 +43,63 @@ def calculator_view(request):
 
 
 class FixtureListView(generics.ListAPIView):
-    permission_classes = [IsPremium]
-    serializer_class   = FixtureSerializer
-    queryset           = Fixture.objects.filter(status="upcoming").order_by("kickoff")
+    serializer_class = FixtureSerializer
+    queryset         = Fixture.objects.filter(status="upcoming").order_by("kickoff")
 
 
 class FixtureDetailView(generics.RetrieveAPIView):
-    permission_classes = [IsPremium]
-    serializer_class   = FixtureSerializer
-    queryset           = Fixture.objects.prefetch_related("odds")
-    lookup_field       = "pk"
+    serializer_class = FixtureSerializer
+    queryset         = Fixture.objects.prefetch_related("odds")
+    lookup_field     = "pk"
 
 
 class ArbitrageResultListView(generics.ListAPIView):
-    permission_classes = [IsPremium]
-    serializer_class   = ArbitrageResultSerializer
-    queryset           = ArbitrageResult.objects.filter(is_valid=True).order_by("-profit_pct")
-
-
-def _is_premium(user):
-    if not user or not user.is_authenticated:
-        return False
-    if user.is_superuser:
-        return True
-    sub = getattr(user, "subscription", None)
-    return bool(sub and sub.is_premium)
+    serializer_class = ArbitrageResultSerializer
+    queryset         = ArbitrageResult.objects.filter(is_valid=True).order_by("-profit_pct")
 
 
 @api_view(["GET"])
-@permission_classes([AllowAny])
 def live_sure_bets_view(request):
-    """Live sure-bets feed with a FREEMIUM teaser.
+    """Open arbs, each sized so the match alone yields `target` profit.
+    Reuses reporting.build_snapshot so numbers match the signed PDF reports."""
+    try:
+        target = float(request.query_params.get("target", 500))
+    except ValueError:
+        target = 0
+    if target <= 0:
+        return Response({"error": "target must be a positive number"}, status=400)
 
-    Free / anonymous users see only the lower-ROI arbs (up to FREE_ARB_ROI_CAP)
-    and a count of how many higher-profit ones are locked. Premium unlocks them
-    all. Reuses reporting.size_arb so the numbers match the signed PDF reports."""
-    target  = float(request.query_params.get("target", 500))
-    cap     = float(getattr(settings, "FREE_ARB_ROI_CAP", 1.0))
-    premium = _is_premium(request.user)
-
-    qs = ArbitrageResult.objects.filter(
-        is_valid=True, profit_pct__gt=0).select_related("fixture").order_by("-profit_pct")
+    qs = _open_arbs().select_related("fixture").order_by("-profit_pct")
     if request.query_params.get("market"):
         qs = qs.filter(market=request.query_params["market"])
-    all_arbs = list(qs[:100])
+    rows = reporting.build_snapshot(qs[:100], target)
+    return Response({"target": target, "count": len(rows), "sure_bets": rows})
 
-    if premium:
-        visible, locked = all_arbs, 0
-    else:
-        visible = [a for a in all_arbs if float(a.profit_pct) <= cap]
-        locked  = len(all_arbs) - len(visible)
 
-    rows = [r for a in visible if (r := reporting.size_arb(a, target))]
+@api_view(["GET"])
+def stats_view(request):
+    """Pipeline health + arb summary for the dashboard overview."""
+    now   = timezone.now()
+    arbs  = _open_arbs()
+    odds  = BookmakerOdds.objects.filter(is_active=True, fixture__kickoff__gt=now)
+    agg   = arbs.aggregate(n=Count("id"), best=Max("profit_pct"), avg=Avg("profit_pct"))
+    books = Counter(b for bs in arbs.values_list("books", flat=True) for b in (bs or []))
+    num   = lambda v: round(float(v), 3) if v is not None else None
     return Response({
-        "target":       target,
-        "is_premium":   premium,
-        "free_roi_cap": cap,
-        "count":        len(rows),
-        "locked_count": locked,
-        "sure_bets":    rows,
+        "fixtures":    Fixture.objects.filter(kickoff__gt=now).count(),
+        "odds_rows":   odds.count(),
+        "books":       sorted(odds.values_list("bookmaker", flat=True).distinct()),
+        "last_fetch":  BookmakerOdds.objects.aggregate(t=Max("fetched_at"))["t"],
+        "last_scan":   ArbitrageResult.objects.aggregate(t=Max("scanned_at"))["t"],
+        "arbs":        agg["n"],
+        "best_margin": num(agg["best"]),
+        "avg_margin":  num(agg["avg"]),
+        "by_market":   list(arbs.values("market").annotate(n=Count("id")).order_by("-n")),
+        "by_book":     [{"book": b, "n": n} for b, n in books.most_common()],
     })
 
 
 @api_view(["POST"])
-@permission_classes([IsPremium])
 def scan_fixture_view(request, pk):
     try:
         fixture = Fixture.objects.prefetch_related("odds").get(pk=pk)
@@ -118,7 +123,6 @@ def scan_fixture_view(request, pk):
 
 
 @api_view(["POST"])
-@permission_classes([IsPremium])
 def add_manual_odds_view(request, pk):
     try:
         fixture = Fixture.objects.get(pk=pk)

@@ -1,8 +1,6 @@
 from django.contrib.auth.models import User
 from rest_framework import serializers
 
-from .models import Subscription
-
 
 class RegisterSerializer(serializers.Serializer):
     username = serializers.CharField(max_length=150)
@@ -22,17 +20,7 @@ class RegisterSerializer(serializers.Serializer):
         )
 
 
-class SubscriptionSerializer(serializers.ModelSerializer):
-    is_premium = serializers.BooleanField(read_only=True)
-
-    class Meta:
-        model  = Subscription
-        fields = ["tier", "status", "is_premium", "provider", "started_at", "expires_at"]
-
-
 class MeSerializer(serializers.ModelSerializer):
-    subscription = SubscriptionSerializer(read_only=True)
-
     class Meta:
         model  = User
-        fields = ["id", "username", "email", "subscription"]
+        fields = ["id", "username", "email", "date_joined"]
