@@ -1,6 +1,8 @@
 import { useState } from "react";
 import { useNavigate, Link } from "react-router-dom";
+import { ArrowRight } from "lucide-react";
 import { useAuth } from "../auth";
+import AuthLayout from "./AuthLayout";
 
 export default function Login() {
   const { login } = useAuth();
@@ -15,24 +17,23 @@ export default function Login() {
     setError(""); setBusy(true);
     try {
       await login(username, password);
-      nav("/live");
+      nav("/app");
     } catch {
-      setError("Invalid username or password.");
+      setError("That username and password don't match.");
     } finally {
       setBusy(false);
     }
   }
 
   return (
-    <div className="card narrow">
-      <h1>Log in</h1>
+    <AuthLayout title="Welcome back" subtitle="Log in to see today's arbs."
+      footer={<>New here? <Link to="/register">Create an account</Link></>}>
       <form onSubmit={submit}>
-        <label>Username<input value={username} onChange={(e) => setU(e.target.value)} required /></label>
-        <label>Password<input type="password" value={password} onChange={(e) => setP(e.target.value)} required /></label>
-        <button className="btn" disabled={busy}>{busy ? "…" : "Log in"}</button>
+        <label>Username<input autoComplete="username" value={username} onChange={(e) => setU(e.target.value)} required /></label>
+        <label>Password<input type="password" autoComplete="current-password" value={password} onChange={(e) => setP(e.target.value)} required /></label>
+        <button className="pill pill-accent pill-lg" disabled={busy}>{busy ? "Logging in…" : <>Log in <ArrowRight size={18} /></>}</button>
       </form>
-      {error && <p className="error">{error}</p>}
-      <p className="muted">No account? <Link to="/register">Sign up free</Link></p>
-    </div>
+      {error && <p className="auth-error" role="alert">{error}</p>}
+    </AuthLayout>
   );
 }

@@ -28,17 +28,20 @@ export function AuthProvider({ children }) {
     loadMe();
   }, []);
 
-  async function login(username, password) {
-    const { data } = await api.post("/auth/token/", { username, password });
+  function store(data) {
     localStorage.setItem("access", data.access);
     localStorage.setItem("refresh", data.refresh);
+  }
+
+  async function login(username, password) {
+    const { data } = await api.post("/auth/token/", { username, password });
+    store(data);
     await loadMe();
   }
 
   async function register(username, email, password) {
     const { data } = await api.post("/auth/register/", { username, email, password });
-    localStorage.setItem("access", data.access);
-    localStorage.setItem("refresh", data.refresh);
+    store(data);
     setUser(data.user);
   }
 
@@ -48,10 +51,8 @@ export function AuthProvider({ children }) {
     setUser(null);
   }
 
-  const isPremium = !!user?.subscription?.is_premium;
-
   return (
-    <AuthCtx.Provider value={{ user, loading, isPremium, login, register, logout, refresh: loadMe }}>
+    <AuthCtx.Provider value={{ user, loading, login, register, logout }}>
       {children}
     </AuthCtx.Provider>
   );

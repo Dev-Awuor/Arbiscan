@@ -1,3 +1,4 @@
+import { useCallback, useEffect, useState } from "react";
 import axios from "axios";
 
 const BASE = import.meta.env.VITE_API_BASE || "http://localhost:8000/api";
@@ -33,6 +34,7 @@ api.interceptors.response.use(
         refreshing = null;
         localStorage.removeItem("access");
         localStorage.removeItem("refresh");
+        if (location.pathname.startsWith("/app")) location.assign("/login");
       }
     }
     return Promise.reject(error);
@@ -40,3 +42,33 @@ api.interceptors.response.use(
 );
 
 export default api;
+
+/* GET with a short in-memory cache, so moving between dashboard pages
+   doesn't refetch. reload() always hits the API. */
+const cache = new Map();
+
+export function useApi(url, ttl = 60_000) {
+  const [state, setState] = useState(() => {
+    const c = cache.get(url);
+    return { data: c?.data ?? null, loading: !c, error: "" };
+  });
+
+  const load = useCallback(async (force) => {
+    const c = cache.get(url);
+    if (!force && c && Date.now() - c.at < ttl) {
+      setState({ data: c.data, loading: false, error: "" });
+      return;
+    }
+    setState((s) => ({ ...s, loading: true, error: "" }));
+    try {
+      const { data } = await api.get(url);
+      cache.set(url, { data, at: Date.now() });
+      setState({ data, loading: false, error: "" });
+    } catch {
+      setState((s) => ({ ...s, loading: false, error: "Could not load data from the API." }));
+    }
+  }, [url, ttl]);
+
+  useEffect(() => { load(false); }, [load]);
+  return { ...state, reload: () => load(true) };
+}
