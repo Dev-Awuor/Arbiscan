@@ -31,7 +31,7 @@ def compute_stakes(odds_list: list, bankroll: float = 10000) -> tuple:
     inv    = [1/o for o in odds_list]
     total  = sum(inv)
     stakes = [round(bankroll*(i/total), 2) for i in inv]
-    payout = round(stakes[0]*odds_list[0], 2)
+    payout = round(min(s*o for s, o in zip(stakes, odds_list)), 2)
     profit = round(payout - bankroll, 2)
     return stakes, payout, profit
 
@@ -81,14 +81,14 @@ def scan_fixture(book_data: dict, bankroll: float = 10000,
             if y and n:
                 add("BTTS","Yes+No",[bY,bN],[y,n])
 
-    for mkt, label in [("OU25","O/U 2.5"),("OU15","O/U 1.5"),("OU35","O/U 3.5")]:
+    for mkt in ("OU25", "OU15", "OU35"):
         for bO in books:
             for bU in books:
                 if bO == bU: continue
                 ov = book_data[bO].get(mkt,{}).get("over")
                 un = book_data[bU].get(mkt,{}).get("under")
                 if ov and un:
-                    add(label,"Ov+Un",[bO,bU],[ov,un])
+                    add(mkt,"Ov+Un",[bO,bU],[ov,un])
 
     seen = {}
     for h in hits:

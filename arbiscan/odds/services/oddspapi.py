@@ -2,11 +2,14 @@ import time
 import requests
 from django.conf import settings
 from odds.services.cache import get_cached, set_cached
+from odds.services.extractor import MARKET_ID_MAP
 
 RATE_LIMIT_SLEEP = 4.0
 MAX_RETRIES      = 3
 BACKOFF_BASE     = 15
-CACHE_TTL        = 3600   # 1 hour  odds dont change faster than this
+CACHE_TTL        = 3600   # fixtures / tournaments
+TOURNAMENT_BATCH = 10     # ponytail: tournamentIds per odds call; docs show comma lists, max size undocumented
+ODDS_CACHE_TTL   = 300    # prices: arbs close in minutes, and fetched_at (the scan freshness filter) is stamped at save time
 
 
 class OddspapiClient:
@@ -17,12 +20,13 @@ class OddspapiClient:
         self.session  = requests.Session()
         self.session.headers.update({"Accept": "application/json"})
 
-    def _get(self, endpoint: str, params: dict, cache: bool = True) -> list | dict:
+    def _get(self, endpoint: str, params: dict, cache: bool = True, ttl: int = CACHE_TTL,
+             shrink=None) -> list | dict:
         params_with_key = {**params, "apiKey": self.api_key}
 
         # Check cache first
         if cache:
-            cached = get_cached(endpoint, params, ttl_seconds=CACHE_TTL)
+            cached = get_cached(endpoint, params, ttl_seconds=ttl)
             if cached is not None:
                 return cached
 
@@ -35,6 +39,8 @@ class OddspapiClient:
 
                 if r.status_code == 200:
                     data = r.json()
+                    if shrink:
+                        data = shrink(data)
                     if cache:
                         set_cached(endpoint, params, data)
                     return data
@@ -66,7 +72,7 @@ class OddspapiClient:
             "tournamentIds": tournament_id,
             "bookmaker":     bookmaker,
             "oddsFormat":    "decimal",
-        })
+        }, ttl=ODDS_CACHE_TTL)
 
     def get_fixtures(self, tournament_id) -> list:
         return self._get("fixtures", {"tournamentId": tournament_id})
@@ -78,32 +84,32 @@ class OddspapiClient:
         return data if isinstance(data, list) else []
 
     def fetch_multi_book_odds(self, tournament_ids: list, bookmakers: list, debug: bool = False) -> dict:
+        """One call per bookmaker per TOURNAMENT_BATCH tournaments (was one per
+        bookmaker per tournament). Responses are trimmed to the markets we scan
+        before caching - raw payloads carry ~100 markets per book (~1-2 MB)."""
+        now = time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime())
+        tids = [str(t) for t in tournament_ids]
         combined = {}
         for i, book in enumerate(bookmakers):
-            if i > 0:
-                import time as _t; _t.sleep(8.0)   # inter-book pause
             print("  [" + str(i+1) + "/" + str(len(bookmakers)) + "] Fetching " + book + "...")
-            all_data = []
-            for tid in tournament_ids:
+            data = []
+            for k in range(0, len(tids), TOURNAMENT_BATCH):
                 chunk = self._get("odds-by-tournaments", {
-                    "tournamentIds": str(tid),
+                    "tournamentIds": ",".join(tids[k:k + TOURNAMENT_BATCH]),
                     "bookmaker":     book,
                     "oddsFormat":    "decimal",
-                })
+                }, ttl=ODDS_CACHE_TTL, shrink=_keep_scanned_markets)
                 if isinstance(chunk, list):
-                    all_data.extend(chunk)
-            data = all_data
+                    data.extend(chunk)
             if debug:
                 print("    -> Got " + str(len(data)) + " records from " + book)
-
-            if not isinstance(data, list):
-                continue
 
             for fx in data:
                 if not isinstance(fx, dict):
                     continue
                 fid = fx.get("fixtureId")
-                if not fid:
+                # Started fixtures can't be arbed pre-match; skip them early.
+                if not fid or (fx.get("startTime") or "9") < now:
                     continue
                 if fid not in combined:
                     combined[fid] = {
@@ -130,3 +136,14 @@ class OddspapiClient:
             except Exception as e:
                 print(f"  WARNING names/{tid}: {e}")
         return names
+
+
+def _keep_scanned_markets(data):
+    """Drop every market the extractor never reads."""
+    if not isinstance(data, list):
+        return data
+    for fx in data:
+        for b in (fx.get("bookmakerOdds") or {}).values():
+            if isinstance(b, dict) and "markets" in b:
+                b["markets"] = {k: v for k, v in b["markets"].items() if k in MARKET_ID_MAP}
+    return data
