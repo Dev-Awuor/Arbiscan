@@ -1,5 +1,6 @@
 from django.core.management.base import BaseCommand
 from django.conf import settings
+from django.db import transaction
 from django.utils.dateparse import parse_datetime
 from odds.models import Tournament, Fixture, BookmakerOdds
 from odds.services.oddspapi import OddspapiClient
@@ -80,7 +81,8 @@ class Command(BaseCommand):
         names = client.fetch_fixture_names(tid_list)
         self.stdout.write(f"Fixtures: {len(raw)}  Names: {len(names)}\n")
 
-        saved_fx = saved_odds = skipped = 0
+        skipped = 0
+        fixtures, odds_rows = {}, []   # fixture_id -> Fixture ; (fixture_id, BookmakerOdds)
 
         for fid, fx in raw.items():
             home, away = names.get(fid, ("?","?"))
@@ -95,13 +97,8 @@ class Command(BaseCommand):
                 if mkts:
                     raw_book_data[book] = mkts
 
-            if len(raw_book_data) < 2:
-                skipped += 1
-                continue
-
             # Remove books with reversed home/away from FT_1X2 only
-            book_data = filter_consistent_books(raw_book_data)
-
+            book_data = filter_consistent_books(raw_book_data) if len(raw_book_data) >= 2 else {}
             if len(book_data) < 2:
                 skipped += 1
                 continue
@@ -114,39 +111,50 @@ class Command(BaseCommand):
                     f"FT:{ft_books}  OU:{ou_books}")
                 continue
 
-            t_obj, _ = Tournament.objects.get_or_create(
-                api_id=str(fx.get("tournamentId","?")),
-                defaults={"slug":"","name":f"Tournament {fx.get('tournamentId')}","category":""}
+            fixtures[fid] = Fixture(
+                fixture_id=fid, home_team=home, away_team=away, status="upcoming",
+                kickoff=parse_datetime(fx["startTime"]) if fx.get("startTime") else None,
             )
-            fixture, _ = Fixture.objects.update_or_create(
-                fixture_id=fid,
-                defaults={
-                    "tournament": t_obj,
-                    "home_team":  home,
-                    "away_team":  away,
-                    "kickoff":    parse_datetime(fx["startTime"]) if fx.get("startTime") else None,
-                    "status":     "upcoming",
-                }
-            )
-            saved_fx += 1
-
+            fixtures[fid].api_tid = str(fx.get("tournamentId", "?"))
             for book, mkts in book_data.items():
                 for mkt_label, legs in mkts.items():
                     leg_map = MARKET_LEG_MAP.get(mkt_label, [])
                     labels  = MARKET_LABELS.get(mkt_label, ("","",""))
-                    BookmakerOdds.objects.update_or_create(
-                        fixture=fixture, bookmaker=book, market=mkt_label,
-                        defaults={
-                            "leg1": legs.get(leg_map[0][1]) if len(leg_map)>0 else None,
-                            "leg2": legs.get(leg_map[1][1]) if len(leg_map)>1 else None,
-                            "leg3": legs.get(leg_map[2][1]) if len(leg_map)>2 else None,
-                            "leg1_label": labels[0],
-                            "leg2_label": labels[1],
-                            "leg3_label": labels[2] if len(labels)>2 else "",
-                            "is_active":  True,
-                            "source":     "oddspapi",
-                        })
-                    saved_odds += 1
+                    odds_rows.append((fid, BookmakerOdds(
+                        bookmaker=book, market=mkt_label, is_active=True, source="oddspapi",
+                        leg1=legs.get(leg_map[0][1]) if len(leg_map)>0 else None,
+                        leg2=legs.get(leg_map[1][1]) if len(leg_map)>1 else None,
+                        leg3=legs.get(leg_map[2][1]) if len(leg_map)>2 else None,
+                        leg1_label=labels[0], leg2_label=labels[1],
+                        leg3_label=labels[2] if len(labels)>2 else "",
+                    )))
+
+        if fixtures:
+            self._save(fixtures, odds_rows)
 
         self.stdout.write(self.style.SUCCESS(
-            f"\nSaved {saved_fx} fixtures, {saved_odds} odds. Skipped: {skipped}"))
+            f"\nSaved {len(fixtures)} fixtures, {len(odds_rows)} odds. Skipped: {skipped}"))
+
+    @transaction.atomic
+    def _save(self, fixtures, odds_rows):
+        """Bulk upserts: a handful of queries instead of one per row."""
+        tids = {f.api_tid for f in fixtures.values()}
+        known = dict(Tournament.objects.filter(api_id__in=tids).values_list("api_id", "id"))
+        Tournament.objects.bulk_create([
+            Tournament(api_id=t, slug="", name=f"Tournament {t}", category="")
+            for t in tids if t not in known])
+        known = dict(Tournament.objects.filter(api_id__in=tids).values_list("api_id", "id"))
+        for f in fixtures.values():
+            f.tournament_id = known[f.api_tid]
+
+        Fixture.objects.bulk_create(
+            fixtures.values(), update_conflicts=True, unique_fields=["fixture_id"],
+            update_fields=["tournament", "home_team", "away_team", "kickoff", "status", "updated_at"])
+        ids = dict(Fixture.objects.filter(fixture_id__in=fixtures).values_list("fixture_id", "id"))
+        for fid, o in odds_rows:
+            o.fixture_id = ids[fid]
+        BookmakerOdds.objects.bulk_create(
+            [o for _, o in odds_rows], batch_size=500, update_conflicts=True,
+            unique_fields=["fixture", "bookmaker", "market"],
+            update_fields=["leg1", "leg2", "leg3", "leg1_label", "leg2_label", "leg3_label",
+                           "is_active", "source", "fetched_at"])
